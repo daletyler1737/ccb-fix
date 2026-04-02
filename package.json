@@ -1,0 +1,22 @@
+{
+  "name": "ccb-fix",
+  "version": "1.0.0",
+  "description": "OpenClaw one-click fix tool with Chinese localization (OpenClaw 一键修复工具)",
+  "main": "fix.js",
+  "bin": {
+    "ccb-fix": "./fix.js"
+  },
+  "scripts": {
+    "start": "node fix.js",
+    "diag": "node fix.js 1",
+    "restart": "node fix.js 2",
+    "fix-feishu": "node fix.js 3",
+    "block-ccb": "node fix.js 4",
+    "full": "node fix.js 7"
+  },
+  "keywords": ["openclaw", "fix", "gateway", "chinese", "ccb"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=16"
+  }
+}
