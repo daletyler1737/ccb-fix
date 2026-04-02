@@ -1,31 +1,83 @@
 #!/usr/bin/env node
 // ccb fix-gateway - OpenClaw one-click fix tool (bilingual, auto-port detect)
 
-const { readFileSync, writeFileSync, existsSync, mkdirSync, cpSync, rmSync, writeFile } = require('fs')
+const { readFileSync, writeFileSync, existsSync, mkdirSync, cpSync, rmSync } = require('fs')
 const { execSync } = require('child_process')
 const { homedir } = require('os')
-const { join } = require('path')
+const path = require('path')
 
 const HOME = homedir()
-const WORKSPACE = '/vol1/@apphome/trim.openclaw/data/home/.openclaw/workspace-taizi'
-const OPENCLAW_JSON = HOME + '/.openclaw/openclaw.json'
-const BACKUP_DIR = HOME + '/.openclaw/backups'
-const SKILLS_DIR = WORKSPACE + '/skills'
-const LANG_FILE = HOME + '/.openclaw/fix-gateway-lang.json'
 
-const C = { r:'\x1b[31m', g:'\x1b[32m', y:'\x1b[33m', b:'\x1b[34m', c:'\x1b[36m', w:'\x1b[37m', R:'\x1b[0m', B:'\x1b[1m' }
+// Search for openclaw.json in common locations
+function findOpenClawJson() {
+  const candidates = [
+    HOME + '/.openclaw/openclaw.json',
+    HOME + '/.openclaw/config.json',
+    '/root/.openclaw/openclaw.json',
+    '/var/apps/openclaw/data/home/.openclaw/openclaw.json',
+    '/vol1/@apphome/trim.openclaw/data/home/.openclaw/openclaw.json',
+  ]
+  for (const p of candidates) {
+    if (existsSync(p)) return p
+  }
+  return null
+}
 
-// Auto-detect port from openclaw.json
-function detectPort() {
+function detectPort(jsonPath) {
+  if (!jsonPath) return 30988
   try {
-    const c = JSON.parse(readFileSync(OPENCLAW_JSON,'utf-8'))
+    const c = JSON.parse(readFileSync(jsonPath,'utf-8'))
     return c.gateway?.port || 30988
   } catch { return 30988 }
 }
 
-let PORT = detectPort()
+function detectGateway(jsonPath) {
+  if (!jsonPath) return null
+  try {
+    const c = JSON.parse(readFileSync(jsonPath,'utf-8'))
+    return c.gateway || null
+  } catch { return null }
+}
 
-// Bilingual labels (always show both zh+en)
+// Persistent config for this tool
+const FIXCFG_DIR = HOME + '/.openclaw'
+const FIXCFG_FILE = FIXCFG_DIR + '/fix-gateway.json'
+const DEFAULT_OPENCLAW_JSON = HOME + '/.openclaw/openclaw.json'
+const BACKUP_DIR = HOME + '/.openclaw/backups'
+const SKILLS_DIR = '/vol1/@apphome/trim.openclaw/data/home/.openclaw/workspace-taizi/skills'
+
+const C = { r:'\x1b[31m', g:'\x1b[32m', y:'\x1b[33m', b:'\x1b[34m', c:'\x1b[36m', w:'\x1b[37m', R:'\x1b[0m', B:'\x1b[1m' }
+
+let OPENCLAW_JSON = DEFAULT_OPENCLAW_JSON
+let PORT = 30988
+let GW_CONFIG = null
+let FIXCFG = null
+
+function loadFixCfg() {
+  try {
+    if (existsSync(FIXCFG_FILE)) {
+      FIXCFG = JSON.parse(readFileSync(FIXCFG_FILE,'utf-8'))
+      if (FIXCFG.openclawJson && existsSync(FIXCFG.openclawJson)) {
+        OPENCLAW_JSON = FIXCFG.openclawJson
+      }
+    }
+  } catch {}
+  // Auto-detect openclaw.json if not found
+  if (!existsSync(OPENCLAW_JSON)) {
+    const found = findOpenClawJson()
+    if (found) OPENCLAW_JSON = found
+  }
+  PORT = detectPort(OPENCLAW_JSON)
+  GW_CONFIG = detectGateway(OPENCLAW_JSON)
+}
+
+function saveFixCfg() {
+  try {
+    mkdirSync(FIXCFG_DIR, {recursive:true})
+    writeFileSync(FIXCFG_FILE, JSON.stringify({openclawJson: OPENCLAW_JSON, port: PORT}, null, 2))
+  } catch {}
+}
+
 const M = {
   1: { zh:'基础诊断 / Diagnostics',       fn:'diag' },
   2: { zh:'重启 Gateway / Restart Gateway', fn:'restart' },
@@ -38,7 +90,6 @@ const M = {
   0: { zh:'退出 / Exit',                   fn:'exit' },
 }
 
-// Fixed labels (same in both languages)
 const T = {
   zh: {
     title: 'OpenClaw 一键修复 / Fix Tool',
@@ -50,7 +101,7 @@ const T = {
     feishuOff:'飞书插件已禁用 / Feishu disabled',
     apiOk:'API Key: {n}个已配置 / {n} configured',
     apiErr:'API Key配置异常 / Config error',
-    apiMiss:'API Key配置文件不存在 / Config missing',
+    apiMiss:'配置文件不存在 / Config missing',
     ccb:'ccb-skills: {n}个 / {n} found',
     err:'最近错误 / Recent errors',
     verTitle:'升级/降级 / Upgrade/Downgrade',
@@ -76,8 +127,8 @@ const T = {
     blkRestored:'已恢复 / Restored',
     blkNoBackup:'无备份可恢复 / No backups',
     apiTitle:'API问题排查 / API Check',
-    apiOk:'已配置 / Configured',
-    apiMiss:'配置文件不存在 / Config missing',
+    apiOk2:'已配置 / Configured',
+    apiMiss2:'配置文件不存在 / Config missing',
     apiCopied:'已复制 / Copied',
     fullTitle:'完整恢复 / Full Recovery',
     fullDesc:'备份+屏蔽ccb+修复飞书+重启 / Backup+block+fix+restart',
@@ -96,7 +147,7 @@ const T = {
     cfgOpt:'配置已优化 / Config optimized',
     restarting:'重启Gateway... / Restarting...',
     kill:'杀掉进程... / Killing...',
-    clear:'清理日志... / Clearing logs...',
+    clear:'清 日志... / Clearing logs...',
     minStart:'最小化启动... / Minimal start...',
     emergDone:'紧急恢复完成 / Emergency done',
     invalid:'无效选择 / Invalid choice',
@@ -111,6 +162,15 @@ const T = {
     alreadyInstalled:'已安装！直接运行 ccb fix 即可 / Already installed! Run ccb fix directly',
     installSuccess:'安装成功！运行 ccb fix 使用 / Install success! Run ccb fix to use',
     installing:'安装中... / Installing...',
+    cfgNotFound:'未找到 OpenClaw 配置文件 / OpenClaw config not found',
+    cfgFound:'已找到配置文件 / Config found at:',
+    cfgAsk:'是否将此路径设为默认配置路径? / Set as default config path?',
+    cfgUpdated:'配置路径已更新 / Config path updated',
+    cfgCreated:'已创建默认配置 / Default config created',
+    portDetected:'检测到端口 / Port detected: {p}',
+    portAsk:'是否将此端口写入配置文件? / Write port to config?',
+    portUpdated:'端口配置已更新 / Port config updated',
+    openClawJson:'配置文件路径 / Config file path:',
   },
   en: {
     title: 'OpenClaw Fix Tool / 一键修复',
@@ -148,8 +208,8 @@ const T = {
     blkRestored:'Restored',
     blkNoBackup:'No backups',
     apiTitle:'API Check',
-    apiOk:'Configured',
-    apiMiss:'Config missing',
+    apiOk2:'Configured',
+    apiMiss2:'Config missing',
     apiCopied:'Copied',
     fullTitle:'Full Recovery',
     fullDesc:'Backup+block+fix+restart',
@@ -183,6 +243,15 @@ const T = {
     alreadyInstalled:'Already installed! Run ccb fix directly',
     installSuccess:'Install success! Run ccb fix to use',
     installing:'Installing...',
+    cfgNotFound:'OpenClaw config not found',
+    cfgFound:'Config found at:',
+    cfgAsk:'Set as default config path?',
+    cfgUpdated:'Config path updated',
+    cfgCreated:'Default config created',
+    portDetected:'Port detected: {p}',
+    portAsk:'Write port to config?',
+    portUpdated:'Port config updated',
+    openClawJson:'Config file path:',
   }
 }
 
@@ -209,14 +278,15 @@ const sleep = ms => new Promise(r => setTimeout(r,ms))
 function loadLang() {
   T.lang = 'en'
   try {
-    if (existsSync(LANG_FILE)) {
-      const d=JSON.parse(readFileSync(LANG_FILE,'utf-8'))
+    const langFile = HOME+'/.openclaw/fix-gateway-lang.json'
+    if (existsSync(langFile)) {
+      const d=JSON.parse(readFileSync(langFile,'utf-8'))
       if (d.lang==='zh'||d.lang==='en') T.lang=d.lang
     }
-  } catch(e) {}
+  } catch {}
 }
 function saveLang() {
-  try { mkdirSync(HOME+'/.openclaw',{recursive:true}); writeFileSync(LANG_FILE,JSON.stringify({lang:T.lang})); } catch(e) {}
+  try { mkdirSync(HOME+'/.openclaw',{recursive:true}); writeFileSync(HOME+'/.openclaw/fix-gateway-lang.json',JSON.stringify({lang:T.lang})); } catch {}
 }
 function toggleLang() { T.lang=T.lang==='zh'?'en':'zh'; saveLang() }
 
@@ -237,6 +307,46 @@ function askStr(q) {
     const rl = require('readline').createInterface({input:process.stdin,output:process.stdout})
     rl.question('  '+C.c+q+C.R+': ', a => { rl.close(); r(a.toLowerCase()) })
   })
+}
+
+// Check and prompt for config on startup
+async function checkConfig() {
+  const found = findOpenClawJson()
+  if (!found) {
+    warn(_('cfgNotFound'))
+    info(_('openClawJson')+' '+OPENCLAW_JSON)
+    const cr = await prompt(_('cfgAsk'))
+    if (cr==='confirm') {
+      const c = { gateway:{port:30988, controlUi:{allowedOrigins:['*'],allowInsecureAuth:true}}, plugins:{entries:{feishu:{enabled:true,config:{}}}} }
+      try {
+        mkdirSync(path.dirname(OPENCLAW_JSON),{recursive:true})
+        saveCfg(c)
+        GW_CONFIG = c.gateway
+        PORT = 30988
+        ok(_('cfgCreated'))
+      } catch(e) { error('Error: '+e.message) }
+    }
+  } else if (found !== OPENCLAW_JSON) {
+    info(_('cfgFound')+' '+found)
+    const cr = await prompt(_('cfgAsk'))
+    if (cr==='confirm') {
+      OPENCLAW_JSON = found
+      PORT = detectPort(OPENCLAW_JSON)
+      GW_CONFIG = detectGateway(OPENCLAW_JSON)
+      saveFixCfg()
+      ok(_('cfgUpdated'))
+    }
+  } else if (GW_CONFIG && GW_CONFIG.port && GW_CONFIG.port !== 30988) {
+    info(_('portDetected',{p:PORT}))
+    const cr = await prompt(_('portAsk'))
+    if (cr==='confirm') {
+      const c = cfg() || { gateway:{}, plugins:{} }
+      c.gateway = c.gateway || {}
+      c.gateway.port = PORT
+      saveCfg(c)
+      ok(_('portUpdated'))
+    }
+  }
 }
 
 async function diag() {
@@ -274,8 +384,8 @@ async function fixFeishu() {
   info(_('checking'))
   const deps = ['@larksuiteoapi/node-sdk','grammy','@grammyjs/runner']
   for (const d of deps) {
-    const found = run('find /vol1/@appcenter -name "'+d+'" -type d 2>/dev/null|head-1')
-    if (!found) { warn(_('missing')+': '+d); run('cd /vol1/@appcenter/nodejs_v22/lib/node_modules/openclaw && npm install '+d+' 2>&1|tail-1') }
+    const found = run('find /vol1/@appcenter -name "'+d+'" -type d 2>/dev/null|head -1')
+    if (!found) { warn(_('missing')+': '+d); run('npm install -g '+d+' 2>&1|tail -1') }
     else info(d+': '+_('installed'))
   }
   const c = cfg()
@@ -343,8 +453,8 @@ async function checkApi() {
   hr(_('apiTitle'))
   const authF = HOME+'/.openclaw/agents/taizi/agent/auth-profiles.json'
   if (!existsSync(authF)) {
-    error(_('apiMiss'))
-    const bak = run('find '+HOME+'/.openclaw -name "auth-profiles.json.bak" 2>/dev/null|head-1')
+    error(_('apiMiss2'))
+    const bak = run('find '+HOME+'/.openclaw -name "auth-profiles.json.bak" 2>/dev/null|head -1')
     if (bak) { info('Backup: '+bak); const cr=await prompt(_('restoreQ')); if (cr==='confirm') { cpSync(bak,authF); ok(_('apiCopied')) } }
     return
   }
@@ -360,7 +470,7 @@ async function checkApi() {
     if (others.length) { others.forEach(f=>info(f)); const cr2=await prompt(_('copy')); if (cr2==='confirm') { cpSync(others[0],authF); ok(_('apiCopied')) } }
   } catch(e) {
     error('Error: '+e.message)
-    const bak = run('find '+HOME+'/.openclaw -name "auth-profiles.json.bak" 2>/dev/null|head-1')
+    const bak = run('find '+HOME+'/.openclaw -name "auth-profiles.json.bak" 2>/dev/null|head -1')
     if (bak) { info('Backup: '+bak); const cr=await prompt(_('restoreQ')); if (cr==='confirm') { cpSync(bak,authF); ok(_('apiCopied')) } }
   }
 }
@@ -391,14 +501,11 @@ async function version() {
   if (n2<1||n2>2) return
   const selR=REGS[n2-1]
   const regName=T.lang==='zh'?selR.nz:selR.ne
-  ln((T.lang==='zh'?'将安装 / Installing':'')+': openclaw@'+selV.v+' ('+regName+')','y')
+  ln('Installing: openclaw@'+selV.v+' ('+regName+')','y')
   const cr = await prompt(_('confirm'))
   if (cr!=='confirm') return
   killGw()
-  run('rm -rf /vol1/@appcenter/nodejs_v22/lib/node_modules/.openclaw-* 2>/dev/null||true')
-  info(_('installing'))
-  const r = run('npm install -g openclaw@'+selV.v+' --registry '+selR.u+' 2>&1|tail-3')
-  info(r)
+  run('npm install -g openclaw@'+selV.v+' --registry '+selR.u+' 2>&1|tail -1')
   const newVer = run('openclaw --version 2>/dev/null')
   ok(_('done')+': '+newVer)
   await sleep(2000)
@@ -411,15 +518,18 @@ async function full() {
   const cr = await prompt(_('confirm'))
   if (cr!=='confirm') return
   info(_('backing'))
-  const bp = backup('full_recovery'); cpSync(OPENCLAW_JSON, bp+'/openclaw.json')
+  const bp = backup('full_recovery')
+  try { cpSync(OPENCLAW_JSON, bp+'/openclaw.json') } catch {}
   ok(_('backed')+': '+bp)
   info(_('blocking'))
   const ccb = run('ls '+SKILLS_DIR+' 2>/dev/null|grep "^ccb-"').split('\n').filter(Boolean)
   mkdirSync(bp+'/skills',{recursive:true})
   for (const s of ccb) { cpSync(SKILLS_DIR+'/'+s, bp+'/skills/'+s, {recursive:true}); rmSync(SKILLS_DIR+'/'+s, {recursive:true,force:true}); info(_('blkRemoved')+': '+s) }
   info(_('fixing'))
-  const c = cfg()
-  if (c) { c.plugins={entries:{feishu:{enabled:true,config:{}}}}; c.gateway=c.gateway||{}; c.gateway.controlUi={allowedOrigins:['*'],allowInsecureAuth:true,dangerouslyDisableDeviceAuth:true}; saveCfg(c); ok(_('cfgOpt')) }
+  const c = cfg() || { gateway:{}, plugins:{} }
+  c.plugins={entries:{feishu:{enabled:true,config:{}}}}; c.gateway=c.gateway||{}; c.gateway.controlUi={allowedOrigins:['*'],allowInsecureAuth:true,dangerouslyDisableDeviceAuth:true}
+  if (PORT !== 30988) c.gateway.port = PORT
+  saveCfg(c); ok(_('cfgOpt'))
   info(_('restarting'))
   killGw(); await sleep(2000)
   const pid = startGw(); await sleep(3000)
@@ -434,39 +544,34 @@ async function emergency() {
   info(_('kill')); killGw(); killGw()
   info(_('clear')); run('rm -rf /tmp/openclaw-0/*.log /tmp/gw*.log 2>/dev/null||true')
   info(_('minStart'))
-  const c = cfg()||{}; c.plugins={entries:{feishu:{enabled:true,config:{}}}}; c.gateway={controlUi:{allowedOrigins:['*'],allowInsecureAuth:true}}; saveCfg(c)
+  const c = cfg()||{ gateway:{port:PORT}, plugins:{}}; c.plugins={entries:{feishu:{enabled:true,config:{}}}}; c.gateway={port:PORT,controlUi:{allowedOrigins:['*'],allowInsecureAuth:true}}; saveCfg(c)
   const pid = startGw(); await sleep(3000)
   ok(_('emergDone')+' (PID '+pid+')')
 }
 
-
-
-// Install wrapper to make `ccb fix` work globally
+// Install wrapper
 async function installWrapper() {
-  const path_mod = require('path')
-  const skillDir = path_mod.dirname(__filename).replace(/\\/g, '/')
+  const { dirname } = require('path')
+  const skillDir = dirname(__filename).replace(/\\/g,'/')
   const wrapperPath = '/usr/local/bin/ccb-fix'
-  const shebang = '#!/bin/bash'
-  const nodeCmd = 'node "' + skillDir.replace(/'/g, "\'") + '/scripts/fix.js" "$@"'
-  const wrapper = shebang + '\n' + nodeCmd + '\n'
+  const wrapper = '#!/bin/bash\n' +
+    'node "' + skillDir.replace(/'/g,"'\\''") + '/fix.js" "$@"\n'
 
   try {
     if (existsSync(wrapperPath)) {
       console.log(_('alreadyInstalled'))
       return
     }
-    writeFile(wrapperPath, wrapper)
+    writeFileSync(wrapperPath, wrapper)
     execSync('chmod +x ' + wrapperPath, {stdio: 'pipe'})
     ok(_('installSuccess'))
     console.log('  ccb fix              # Run directly')
     console.log('  ccb fix 1            # Diagnostics')
-    console.log('  ccb fix --lang en    # English')
-    console.log('  ccb fix --lang zh    # Chinese')
   } catch(e) {
-    const userBin = HOME + '/.local/bin'
-    mkdirSync(userBin, {recursive: true})
-    const userPath = userBin + '/ccb-fix'
-    writeFile(userPath, wrapper)
+    const userBin = HOME+'/.local/bin'
+    mkdirSync(userBin, {recursive:true})
+    const userPath = userBin+'/ccb-fix'
+    writeFileSync(userPath, wrapper)
     execSync('chmod +x ' + userPath, {stdio: 'pipe'})
     ok(_('installSuccess'))
     console.log('  Installed to ~/.local/bin/ccb-fix')
@@ -475,36 +580,34 @@ async function installWrapper() {
 }
 
 async function main() {
+  loadFixCfg()
   loadLang()
   const args = process.argv.slice(2)
-  
+
   if (args.includes('--install')) {
     await installWrapper()
     return
   }
-  
+
   if (args.includes('--lang')) {
     const idx = args.indexOf('--lang')
     if (args[idx+1]==='en') { T.lang='en'; saveLang() }
     else if (args[idx+1]==='zh') { T.lang='zh'; saveLang() }
   }
-  
-  // Direct run: ccb fix 1 / ccb fix 7
+
+  // Direct run: ccb fix 1
   if (args.length > 0) {
     const n = parseInt(args[0])
     const fn = M[n]?.fn
-    if (fn && fn!=='exit') { 
-      if (typeof eval(fn) === 'function') {
-        await eval(fn+'()')
-        return
-      }
+    if (fn && fn!=='exit') {
+      if (typeof eval(fn) === 'function') { await eval(fn+'()'); return }
     }
     if (n===0) { console.log('\n'); return }
   }
-  
-  // Auto-detect port
-  PORT = detectPort()
-  
+
+  // Startup config check
+  await checkConfig()
+
   // Interactive menu
   while (1) {
     hr(_('title'))
