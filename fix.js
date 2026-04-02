@@ -188,7 +188,7 @@ const T = {
 
 const _ = (cat, v) => {
   let s = T[T.lang]?.[cat] || T.en[cat] || cat
-  if (v) Object.keys(v).forEach(k => s = s.replace('{'+k+'}', v[k]))
+  if (v) Object.keys(v).forEach(k => s = s.split('{'+k+'}').join(v[k]))
   return s
 }
 const ln = (s, c='w') => console.log('  '+(C[c]||C.w)+s+C.R)
