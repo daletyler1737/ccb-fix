@@ -441,27 +441,24 @@ async function emergency() {
 
 // Install wrapper to make `ccb fix` work globally
 async function installWrapper() {
+  const skillDir = __dirname.replace(/\\/g,'/').replace(/\\/scripts$/,'')
   const wrapperPath = '/usr/local/bin/ccb-fix'
   const wrapper = '#!/bin/bash\n' +
-    'SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)/scripts/fix.js"\n' +
-    'node "$SCRIPT_DIR" "$@"\n'
-  
+    'node "' + skillDir.replace(/'/g,"'\\''") + '/scripts/fix.js" "$@"\n'
+
   try {
-    // Check if already installed
     if (existsSync(wrapperPath)) {
       console.log(_('alreadyInstalled'))
       return
     }
-    
     writeFile(wrapperPath, wrapper)
     execSync('chmod +x '+wrapperPath, {stdio:'pipe'})
     ok(_('installSuccess'))
-    console.log('  ccb fix        # Run directly')
-    console.log('  ccb fix 1      # Diagnostics')
-    console.log('  ccb fix --lang en   # English')
-    console.log('  ccb fix --lang zh   # 中文')
+    console.log('  ccb fix              # Run directly')
+    console.log('  ccb fix 1            # Diagnostics')
+    console.log('  ccb fix --lang en    # English')
+    console.log('  ccb fix --lang zh    # 中文')
   } catch(e) {
-    // Try user install
     const userBin = HOME+'/.local/bin'
     mkdirSync(userBin, {recursive:true})
     const userPath = userBin+'/ccb-fix'
@@ -469,8 +466,7 @@ async function installWrapper() {
     execSync('chmod +x '+userPath, {stdio:'pipe'})
     ok(_('installSuccess'))
     console.log('  Installed to ~/.local/bin/ccb-fix')
-    console.log('  Add ~/.local/bin to PATH if not already:')
-    console.log('    export PATH="$HOME/.local/bin:$PATH"')
+    console.log('  Add to PATH: export PATH="$HOME/.local/bin:$PATH"')
   }
 }
 
