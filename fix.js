@@ -447,7 +447,7 @@ async function installWrapper() {
   const skillDir = path_mod.dirname(__filename).replace(/\\/g, '/')
   const wrapperPath = '/usr/local/bin/ccb-fix'
   const shebang = '#!/bin/bash'
-  const nodeCmd = 'node "' + skillDir.replace(/'/g, "'''") + '/scripts/fix.js" "$@"'
+  const nodeCmd = 'node "' + skillDir.replace(/'/g, "\'") + '/scripts/fix.js" "$@"'
   const wrapper = shebang + '\n' + nodeCmd + '\n'
 
   try {
