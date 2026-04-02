@@ -439,12 +439,16 @@ async function emergency() {
   ok(_('emergDone')+' (PID '+pid+')')
 }
 
+
+
 // Install wrapper to make `ccb fix` work globally
 async function installWrapper() {
-  const skillDir = __dirname.replace(/\\/g,'/').replace(/\\/scripts$/,'')
+  const path_mod = require('path')
+  const skillDir = path_mod.dirname(__filename).replace(/\\/g, '/')
   const wrapperPath = '/usr/local/bin/ccb-fix'
-  const wrapper = '#!/bin/bash\n' +
-    'node "' + skillDir.replace(/'/g,"'\\''") + '/scripts/fix.js" "$@"\n'
+  const shebang = '#!/bin/bash'
+  const nodeCmd = 'node "' + skillDir.replace(/'/g, "'''") + '/scripts/fix.js" "$@"'
+  const wrapper = shebang + '\n' + nodeCmd + '\n'
 
   try {
     if (existsSync(wrapperPath)) {
@@ -452,18 +456,18 @@ async function installWrapper() {
       return
     }
     writeFile(wrapperPath, wrapper)
-    execSync('chmod +x '+wrapperPath, {stdio:'pipe'})
+    execSync('chmod +x ' + wrapperPath, {stdio: 'pipe'})
     ok(_('installSuccess'))
     console.log('  ccb fix              # Run directly')
     console.log('  ccb fix 1            # Diagnostics')
     console.log('  ccb fix --lang en    # English')
-    console.log('  ccb fix --lang zh    # 中文')
+    console.log('  ccb fix --lang zh    # Chinese')
   } catch(e) {
-    const userBin = HOME+'/.local/bin'
-    mkdirSync(userBin, {recursive:true})
-    const userPath = userBin+'/ccb-fix'
+    const userBin = HOME + '/.local/bin'
+    mkdirSync(userBin, {recursive: true})
+    const userPath = userBin + '/ccb-fix'
     writeFile(userPath, wrapper)
-    execSync('chmod +x '+userPath, {stdio:'pipe'})
+    execSync('chmod +x ' + userPath, {stdio: 'pipe'})
     ok(_('installSuccess'))
     console.log('  Installed to ~/.local/bin/ccb-fix')
     console.log('  Add to PATH: export PATH="$HOME/.local/bin:$PATH"')
