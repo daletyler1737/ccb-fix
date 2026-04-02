@@ -1,0 +1,522 @@
+#!/usr/bin/env node
+// ccb fix-gateway - OpenClaw one-click fix tool (bilingual, auto-port detect)
+
+const { readFileSync, writeFileSync, existsSync, mkdirSync, cpSync, rmSync, writeFile } = require('fs')
+const { execSync } = require('child_process')
+const { homedir } = require('os')
+const { join } = require('path')
+
+const HOME = homedir()
+const WORKSPACE = '/vol1/@apphome/trim.openclaw/data/home/.openclaw/workspace-taizi'
+const OPENCLAW_JSON = HOME + '/.openclaw/openclaw.json'
+const BACKUP_DIR = HOME + '/.openclaw/backups'
+const SKILLS_DIR = WORKSPACE + '/skills'
+const LANG_FILE = HOME + '/.openclaw/fix-gateway-lang.json'
+
+const C = { r:'\x1b[31m', g:'\x1b[32m', y:'\x1b[33m', b:'\x1b[34m', c:'\x1b[36m', w:'\x1b[37m', R:'\x1b[0m', B:'\x1b[1m' }
+
+// Auto-detect port from openclaw.json
+function detectPort() {
+  try {
+    const c = JSON.parse(readFileSync(OPENCLAW_JSON,'utf-8'))
+    return c.gateway?.port || 30988
+  } catch { return 30988 }
+}
+
+let PORT = detectPort()
+
+// Bilingual labels (always show both zh+en)
+const M = {
+  1: { zh:'基础诊断 / Diagnostics',       fn:'diag' },
+  2: { zh:'重启 Gateway / Restart Gateway', fn:'restart' },
+  3: { zh:'修复飞书 / Fix Feishu',         fn:'fixFeishu' },
+  4: { zh:'屏蔽 Skills / Block Skills',    fn:'blockSkills' },
+  5: { zh:'API 问题排查 / API Check',      fn:'checkApi' },
+  6: { zh:'升级/降级 / Upgrade/Downgrade',  fn:'version' },
+  7: { zh:'完整恢复 / Full Recovery',       fn:'full' },
+  8: { zh:'紧急模式 / Emergency Mode',      fn:'emergency' },
+  0: { zh:'退出 / Exit',                   fn:'exit' },
+}
+
+// Fixed labels (same in both languages)
+const T = {
+  zh: {
+    title: 'OpenClaw 一键修复 / Fix Tool',
+    run:'Gateway运行中 (PID {p}) / Running (PID {p})',
+    down:'Gateway未运行 / Not running',
+    portOk:'端口 {p} 正常 / Port {p} OK',
+    portDown:'端口 {p} 未监听 / Port {p} not listening',
+    feishuOn:'飞书插件已启用 / Feishu enabled',
+    feishuOff:'飞书插件已禁用 / Feishu disabled',
+    apiOk:'API Key: {n}个已配置 / {n} configured',
+    apiErr:'API Key配置异常 / Config error',
+    apiMiss:'API Key配置文件不存在 / Config missing',
+    ccb:'ccb-skills: {n}个 / {n} found',
+    err:'最近错误 / Recent errors',
+    verTitle:'升级/降级 / Upgrade/Downgrade',
+    curVer:'当前版本 / Current version',
+    selVer:'选择版本 / Select version',
+    selReg:'选择源 / Select registry',
+    intl:'国际源 / International',
+    cn:'中国源 / China',
+    done:'安装完成 / Done',
+    restartTitle:'重启Gateway / Restart Gateway',
+    restartDone:'Gateway重启完成 / Restarted',
+    feishuTitle:'修复飞书 / Fix Feishu',
+    feishuDone:'飞书修复完成 / Feishu fixed',
+    blkTitle:'屏蔽Skills / Block Skills',
+    blkA:'屏蔽所有ccb-skills / Block all ccb-skills',
+    blkB:'屏蔽指定skill / Block specific skill',
+    blkC:'恢复已屏蔽的skills / Restore blocked skills',
+    blkSel:'选择(a/b/c) / Choice (a/b/c)',
+    blkNo:'无ccb-skills / No ccb-skills',
+    blkRemoved:'已移除 / Removed',
+    blkMoved:'已移走到 / Moved to',
+    blkBlocked:'已屏蔽 / Blocked',
+    blkRestored:'已恢复 / Restored',
+    blkNoBackup:'无备份可恢复 / No backups',
+    apiTitle:'API问题排查 / API Check',
+    apiOk:'已配置 / Configured',
+    apiMiss:'配置文件不存在 / Config missing',
+    apiCopied:'已复制 / Copied',
+    fullTitle:'完整恢复 / Full Recovery',
+    fullDesc:'备份+屏蔽ccb+修复飞书+重启 / Backup+block+fix+restart',
+    emTitle:'紧急模式 / Emergency Mode',
+    emDesc:'最高优先级 / Priority restore',
+    confirm:'确认执行? / Confirm?',
+    cancel:'已取消 / Cancelled',
+    checking:'检查依赖... / Checking deps...',
+    missing:'缺失 / Missing',
+    installed:'已安装 / Installed',
+    cfgFixed:'配置已修复 / Config fixed',
+    backing:'备份... / Backing up...',
+    backed:'已备份 / Backed up',
+    blocking:'屏蔽ccb... / Blocking ccb...',
+    fixing:'修复配置... / Fixing config...',
+    cfgOpt:'配置已优化 / Config optimized',
+    restarting:'重启Gateway... / Restarting...',
+    kill:'杀掉进程... / Killing...',
+    clear:'清理日志... / Clearing logs...',
+    minStart:'最小化启动... / Minimal start...',
+    emergDone:'紧急恢复完成 / Emergency done',
+    invalid:'无效选择 / Invalid choice',
+    backup:'备份位置 / Backup',
+    checkDeps:'检查依赖 / Check deps',
+    listSkills:'可用Skills / Available Skills',
+    select:'选择 / Select',
+    restore:'恢复 / Restore',
+    copyOther:'复制其他agent认证? / Copy other agent auth?',
+    copy:'复制 / Copy',
+    restoreQ:'恢复备份? / Restore backup?',
+    alreadyInstalled:'已安装！直接运行 ccb fix 即可 / Already installed! Run ccb fix directly',
+    installSuccess:'安装成功！运行 ccb fix 使用 / Install success! Run ccb fix to use',
+    installing:'安装中... / Installing...',
+  },
+  en: {
+    title: 'OpenClaw Fix Tool / 一键修复',
+    run:'Gateway running (PID {p})',
+    down:'Gateway not running',
+    portOk:'Port {p} OK',
+    portDown:'Port {p} not listening',
+    feishuOn:'Feishu enabled',
+    feishuOff:'Feishu disabled',
+    apiOk:'API Key: {n} configured',
+    apiErr:'API Key config error',
+    apiMiss:'API Key config missing',
+    ccb:'ccb-skills: {n} found',
+    err:'Recent errors',
+    verTitle:'Upgrade/Downgrade',
+    curVer:'Current version',
+    selVer:'Select version',
+    selReg:'Select registry',
+    intl:'International',
+    cn:'China',
+    done:'Done',
+    restartTitle:'Restart Gateway',
+    restartDone:'Gateway restarted',
+    feishuTitle:'Fix Feishu',
+    feishuDone:'Feishu fixed',
+    blkTitle:'Block Skills',
+    blkA:'Block all ccb-skills',
+    blkB:'Block specific skill',
+    blkC:'Restore blocked skills',
+    blkSel:'Choice (a/b/c)',
+    blkNo:'No ccb-skills',
+    blkRemoved:'Removed',
+    blkMoved:'Moved to',
+    blkBlocked:'Blocked',
+    blkRestored:'Restored',
+    blkNoBackup:'No backups',
+    apiTitle:'API Check',
+    apiOk:'Configured',
+    apiMiss:'Config missing',
+    apiCopied:'Copied',
+    fullTitle:'Full Recovery',
+    fullDesc:'Backup+block+fix+restart',
+    emTitle:'Emergency Mode',
+    emDesc:'Priority restore',
+    confirm:'Confirm?',
+    cancel:'Cancelled',
+    checking:'Checking deps...',
+    missing:'Missing',
+    installed:'Installed',
+    cfgFixed:'Config fixed',
+    backing:'Backing up...',
+    backed:'Backed up',
+    blocking:'Blocking ccb...',
+    fixing:'Fixing config...',
+    cfgOpt:'Config optimized',
+    restarting:'Restarting...',
+    kill:'Killing...',
+    clear:'Clearing logs...',
+    minStart:'Minimal start...',
+    emergDone:'Emergency done',
+    invalid:'Invalid choice',
+    backup:'Backup',
+    checkDeps:'Check deps',
+    listSkills:'Available Skills',
+    select:'Select',
+    restore:'Restore',
+    copyOther:'Copy other agent auth?',
+    copy:'Copy',
+    restoreQ:'Restore backup?',
+    alreadyInstalled:'Already installed! Run ccb fix directly',
+    installSuccess:'Install success! Run ccb fix to use',
+    installing:'Installing...',
+  }
+}
+
+const _ = (cat, v) => {
+  let s = T[T.lang]?.[cat] || T.en[cat] || cat
+  if (v) Object.keys(v).forEach(k => s = s.replace('{'+k+'}', v[k]))
+  return s
+}
+const ln = (s, c='w') => console.log('  '+(C[c]||C.w)+s+C.R)
+const info = s => ln('[i] '+s, 'c')
+const warn = s => ln('[!] '+s, 'y')
+const error = s => ln('[X] '+s, 'r')
+const ok = s => ln('[OK] '+s, 'g')
+const hr = t => console.log('\n'+C.B+'== '+t+' =='+C.R+'\n')
+
+const run = c => { try { return execSync(c,{encoding:'utf-8',stdio:'pipe'}).trim() } catch(e) { return '' } }
+const cfg = () => { try { return JSON.parse(readFileSync(OPENCLAW_JSON,'utf-8')) } catch { return null } }
+const saveCfg = c => writeFileSync(OPENCLAW_JSON, JSON.stringify(c,null,2))
+const killGw = () => { run('pkill -f openclaw-gateway 2>/dev/null||true'); run('killall openclaw-gateway 2>/dev/null||true') }
+const startGw = () => { execSync('nohup openclaw gateway>/tmp/gw_fix.log 2>&1 &',{stdio:'pipe'}); return run('pgrep -f openclaw-gateway').split('\n')[0] }
+const backup = n => { const d=BACKUP_DIR+'/'+n+'_'+Date.now(); mkdirSync(d,{recursive:true}); return d }
+const sleep = ms => new Promise(r => setTimeout(r,ms))
+
+function loadLang() {
+  T.lang = 'en'
+  try {
+    if (existsSync(LANG_FILE)) {
+      const d=JSON.parse(readFileSync(LANG_FILE,'utf-8'))
+      if (d.lang==='zh'||d.lang==='en') T.lang=d.lang
+    }
+  } catch(e) {}
+}
+function saveLang() {
+  try { mkdirSync(HOME+'/.openclaw',{recursive:true}); writeFileSync(LANG_FILE,JSON.stringify({lang:T.lang})); } catch(e) {}
+}
+function toggleLang() { T.lang=T.lang==='zh'?'en':'zh'; saveLang() }
+
+function prompt(q) {
+  return new Promise(r => {
+    const rl = require('readline').createInterface({input:process.stdin,output:process.stdout})
+    rl.question('  '+C.c+q+C.R+'  '+C.g+'y'+C.R+'/'+C.y+'n'+C.R+': ', a => { rl.close(); r(a.toLowerCase()==='y'?'confirm':'cancel') })
+  })
+}
+function askNum(max, q) {
+  return new Promise(r => {
+    const rl = require('readline').createInterface({input:process.stdin,output:process.stdout})
+    rl.question('  '+C.c+q+C.R+' ('+C.c+'1-'+max+C.R+'): ', a => { rl.close(); const n=parseInt(a); r(isNaN(n)?0:n) })
+  })
+}
+function askStr(q) {
+  return new Promise(r => {
+    const rl = require('readline').createInterface({input:process.stdin,output:process.stdout})
+    rl.question('  '+C.c+q+C.R+': ', a => { rl.close(); r(a.toLowerCase()) })
+  })
+}
+
+async function diag() {
+  hr(_('diag')||'Diagnostics')
+  const pid = run('pgrep -f openclaw-gateway').split('\n')[0]
+  if (pid) ok(_('run',{p:pid})); else error(_('down'))
+  const port = run('ss -tlnp 2>/dev/null|grep '+PORT+'||netstat -tlnp 2>/dev/null|grep '+PORT)
+  if (port) ok(_('portOk',{p:PORT})); else error(_('portDown',{p:PORT}))
+  const c = cfg()
+  const feishuOn = c && c.plugins?.entries?.feishu?.enabled !== false
+  if (feishuOn) ok(_('feishuOn')); else warn(_('feishuOff'))
+  const authF = HOME+'/.openclaw/agents/taizi/agent/auth-profiles.json'
+  if (existsSync(authF)) {
+    try { const a=JSON.parse(readFileSync(authF,'utf-8')); ok(_('apiOk',{n:Object.keys(a.profiles||{}).length})) } catch { warn(_('apiErr')) }
+  } else error(_('apiMiss'))
+  const ccb = run('ls '+SKILLS_DIR+' 2>/dev/null|grep "^ccb-"|wc -l').trim()
+  if (ccb>0) warn(_('ccb',{n:ccb}))
+  const err = run('tail -30 /tmp/openclaw-0/openclaw-$(date +%Y-%m-%d).log 2>/dev/null|grep -i "error\\|failed"|tail -3')
+  if (err) { warn(_('err')); err.split('\n').forEach(l=>ln('  '+l.slice(0,100),'y')) }
+}
+
+async function restart() {
+  hr(_('restartTitle'))
+  const cr = await prompt(_('confirm'))
+  if (cr!=='confirm') return
+  killGw(); await sleep(2000)
+  const pid = startGw(); await sleep(3000)
+  ok(_('restartDone')+' (PID '+pid+')')
+}
+
+async function fixFeishu() {
+  hr(_('feishuTitle'))
+  const cr = await prompt(_('confirm'))
+  if (cr!=='confirm') return
+  info(_('checking'))
+  const deps = ['@larksuiteoapi/node-sdk','grammy','@grammyjs/runner']
+  for (const d of deps) {
+    const found = run('find /vol1/@appcenter -name "'+d+'" -type d 2>/dev/null|head-1')
+    if (!found) { warn(_('missing')+': '+d); run('cd /vol1/@appcenter/nodejs_v22/lib/node_modules/openclaw && npm install '+d+' 2>&1|tail-1') }
+    else info(d+': '+_('installed'))
+  }
+  const c = cfg()
+  if (c) { c.plugins=c.plugins||{}; c.plugins.entries=c.plugins.entries||{}; c.plugins.entries.feishu={enabled:true,config:{}}; saveCfg(c); ok(_('cfgFixed')) }
+  killGw(); await sleep(2000)
+  const pid = startGw(); await sleep(3000)
+  ok(_('restartDone')+' (PID '+pid+')')
+}
+
+async function blockSkills() {
+  hr(_('blkTitle'))
+  console.log('  '+C.c+'a)'+C.R+' '+_('blkA'))
+  console.log('  '+C.c+'b)'+C.R+' '+_('blkB'))
+  console.log('  '+C.c+'c)'+C.R+' '+_('blkC'))
+  const ans = await askStr(_('blkSel'))
+  if (ans==='a') return await blockAll()
+  if (ans==='b') return await blockOne()
+  if (ans==='c') return await restoreAll()
+}
+
+async function blockAll() {
+  const cr = await prompt(_('confirm'))
+  if (cr!=='confirm') return
+  const bp = backup('ccb-skills')
+  const ccb = run('ls '+SKILLS_DIR+' 2>/dev/null|grep "^ccb-"').split('\n').filter(Boolean)
+  if (!ccb.length) { info(_('blkNo')); return }
+  mkdirSync(bp+'/skills',{recursive:true})
+  for (const s of ccb) { cpSync(SKILLS_DIR+'/'+s, bp+'/skills/'+s, {recursive:true}); rmSync(SKILLS_DIR+'/'+s, {recursive:true,force:true}); info(_('blkRemoved')+': '+s) }
+  ok(_('blkMoved')+': '+bp)
+  await doRestart()
+}
+
+async function blockOne() {
+  const all = run('ls '+SKILLS_DIR+' 2>/dev/null').split('\n').filter(Boolean)
+  console.log('\n  '+_('listSkills')+':')
+  all.forEach((s,i) => console.log('    '+(i+1)+'. '+s))
+  const n = await askNum(all.length, _('select'))
+  const skill = n>=1&&n<=all.length ? all[n-1] : ''
+  if (!skill) return
+  const bp = backup('skill_'+skill)
+  cpSync(SKILLS_DIR+'/'+skill, bp+'/'+skill, {recursive:true})
+  rmSync(SKILLS_DIR+'/'+skill, {recursive:true,force:true})
+  ok(_('blkBlocked')+': '+skill)
+  await doRestart()
+}
+
+async function restoreAll() {
+  const backups = run('ls '+BACKUP_DIR+' 2>/dev/null|grep "^ccb-\\|^skill_"').split('\n').filter(Boolean)
+  if (!backups.length) { info(_('blkNoBackup')); return }
+  const cr = await prompt(_('confirm'))
+  if (cr!=='confirm') return
+  for (const b of backups) {
+    const src=BACKUP_DIR+'/'+b; const name=b.replace(/_\d+$/,'')
+    if (existsSync(src)) { cpSync(src, SKILLS_DIR+'/'+name, {recursive:true}); ok(_('blkRestored')+': '+name) }
+  }
+  await doRestart()
+}
+
+async function doRestart() {
+  killGw(); await sleep(2000)
+  const pid = startGw(); info(_('restartDone')+' (PID '+pid+')')
+}
+
+async function checkApi() {
+  hr(_('apiTitle'))
+  const authF = HOME+'/.openclaw/agents/taizi/agent/auth-profiles.json'
+  if (!existsSync(authF)) {
+    error(_('apiMiss'))
+    const bak = run('find '+HOME+'/.openclaw -name "auth-profiles.json.bak" 2>/dev/null|head-1')
+    if (bak) { info('Backup: '+bak); const cr=await prompt(_('restoreQ')); if (cr==='confirm') { cpSync(bak,authF); ok(_('apiCopied')) } }
+    return
+  }
+  try {
+    const a = JSON.parse(readFileSync(authF,'utf-8'))
+    for (const [n,p] of Object.entries(a.profiles||{})) {
+      const exp = p.expires?new Date(p.expires).toLocaleString():'Never'
+      ln(n+': '+(p.type==='oauth'?'OAuth':'API Key')+' ('+exp+')','g')
+    }
+    const cr = await prompt(_('copyOther'))
+    if (cr!=='confirm') return
+    const others = run('find '+HOME+'/.openclaw/agents -name "auth-profiles.json" -not -path "*taizi/agent*" 2>/dev/null').split('\n').filter(Boolean)
+    if (others.length) { others.forEach(f=>info(f)); const cr2=await prompt(_('copy')); if (cr2==='confirm') { cpSync(others[0],authF); ok(_('apiCopied')) } }
+  } catch(e) {
+    error('Error: '+e.message)
+    const bak = run('find '+HOME+'/.openclaw -name "auth-profiles.json.bak" 2>/dev/null|head-1')
+    if (bak) { info('Backup: '+bak); const cr=await prompt(_('restoreQ')); if (cr==='confirm') { cpSync(bak,authF); ok(_('apiCopied')) } }
+  }
+}
+
+const VERS = [
+  {v:'2026.3.13',l:'3.13',note:{zh:'老稳定版',en:'Old stable'}},
+  {v:'2026.3.24',l:'3.24',note:{zh:'较稳定',en:'Stable'}},
+  {v:'2026.3.28',l:'3.28',note:{zh:'稳定',en:'More stable'}},
+  {v:'2026.3.31',l:'3.31',note:{zh:'最新稳定',en:'Latest stable'}},
+]
+const REGS = [
+  {nz:'国际源',ne:'International',u:'https://registry.npmjs.org'},
+  {nz:'中国源',ne:'China',u:'https://registry.npmmirror.com'},
+]
+
+async function version() {
+  hr(_('verTitle'))
+  const cur = run('openclaw --version 2>/dev/null')
+  ln(_('curVer')+': '+cur,'y')
+  console.log('\n  '+_('selVer')+':\n')
+  VERS.forEach((v,i) => { const note=T.lang==='zh'?v.note.zh:v.note.en; const mark=cur.includes(v.v)?' <=' :''; console.log('    '+(i+1)+'. 2026.'+v.l+' ('+note+')'+mark) })
+  const n1 = await askNum(4, '')
+  if (n1<1||n1>4) return
+  const selV=VERS[n1-1]
+  console.log('\n  '+_('selReg')+':\n')
+  REGS.forEach((r,i) => { const n=T.lang==='zh'?r.nz:r.ne; console.log('    '+(i+1)+'. '+n+' ('+r.u+')') })
+  const n2 = await askNum(2, '')
+  if (n2<1||n2>2) return
+  const selR=REGS[n2-1]
+  const regName=T.lang==='zh'?selR.nz:selR.ne
+  ln((T.lang==='zh'?'将安装 / Installing':'')+': openclaw@'+selV.v+' ('+regName+')','y')
+  const cr = await prompt(_('confirm'))
+  if (cr!=='confirm') return
+  killGw()
+  run('rm -rf /vol1/@appcenter/nodejs_v22/lib/node_modules/.openclaw-* 2>/dev/null||true')
+  info(_('installing'))
+  const r = run('npm install -g openclaw@'+selV.v+' --registry '+selR.u+' 2>&1|tail-3')
+  info(r)
+  const newVer = run('openclaw --version 2>/dev/null')
+  ok(_('done')+': '+newVer)
+  await sleep(2000)
+  const pid = startGw(); info(_('restartDone')+' (PID '+pid+')')
+}
+
+async function full() {
+  hr(_('fullTitle'))
+  info(_('fullDesc'))
+  const cr = await prompt(_('confirm'))
+  if (cr!=='confirm') return
+  info(_('backing'))
+  const bp = backup('full_recovery'); cpSync(OPENCLAW_JSON, bp+'/openclaw.json')
+  ok(_('backed')+': '+bp)
+  info(_('blocking'))
+  const ccb = run('ls '+SKILLS_DIR+' 2>/dev/null|grep "^ccb-"').split('\n').filter(Boolean)
+  mkdirSync(bp+'/skills',{recursive:true})
+  for (const s of ccb) { cpSync(SKILLS_DIR+'/'+s, bp+'/skills/'+s, {recursive:true}); rmSync(SKILLS_DIR+'/'+s, {recursive:true,force:true}); info(_('blkRemoved')+': '+s) }
+  info(_('fixing'))
+  const c = cfg()
+  if (c) { c.plugins={entries:{feishu:{enabled:true,config:{}}}}; c.gateway=c.gateway||{}; c.gateway.controlUi={allowedOrigins:['*'],allowInsecureAuth:true,dangerouslyDisableDeviceAuth:true}; saveCfg(c); ok(_('cfgOpt')) }
+  info(_('restarting'))
+  killGw(); await sleep(2000)
+  const pid = startGw(); await sleep(3000)
+  ok(_('fullTitle')); ok(_('backup')+': '+bp)
+}
+
+async function emergency() {
+  hr(_('emTitle'))
+  warn(_('emDesc'))
+  const cr = await prompt(_('confirm'))
+  if (cr!=='confirm') return
+  info(_('kill')); killGw(); killGw()
+  info(_('clear')); run('rm -rf /tmp/openclaw-0/*.log /tmp/gw*.log 2>/dev/null||true')
+  info(_('minStart'))
+  const c = cfg()||{}; c.plugins={entries:{feishu:{enabled:true,config:{}}}}; c.gateway={controlUi:{allowedOrigins:['*'],allowInsecureAuth:true}}; saveCfg(c)
+  const pid = startGw(); await sleep(3000)
+  ok(_('emergDone')+' (PID '+pid+')')
+}
+
+// Install wrapper to make `ccb fix` work globally
+async function installWrapper() {
+  const {dirname} = require('path')
+  const skillDir = dirname(__filename).replace(/\\/g,'/')
+  const wrapperPath = '/usr/local/bin/ccb-fix'
+  const wrapper = '#!/bin/bash
+' +
+    'node "' + skillDir.replace(/'/g,"'\''") + '/scripts/fix.js" "$@"
+'
+
+  try {
+    if (existsSync(wrapperPath)) {
+      console.log(_('alreadyInstalled'))
+      return
+    }
+    writeFile(wrapperPath, wrapper)
+    execSync('chmod +x '+wrapperPath, {stdio:'pipe'})
+    ok(_('installSuccess'))
+    console.log('  ccb fix              # Run directly')
+    console.log('  ccb fix 1            # Diagnostics')
+    console.log('  ccb fix --lang en    # English')
+    console.log('  ccb fix --lang zh    # 中文')
+  } catch(e) {
+    const userBin = HOME+'/.local/bin'
+    mkdirSync(userBin, {recursive:true})
+    const userPath = userBin+'/ccb-fix'
+    writeFile(userPath, wrapper)
+    execSync('chmod +x '+userPath, {stdio:'pipe'})
+    ok(_('installSuccess'))
+    console.log('  Installed to ~/.local/bin/ccb-fix')
+    console.log('  Add to PATH: export PATH="$HOME/.local/bin:$PATH"')
+  }
+}
+
+async function main()() {
+  loadLang()
+  const args = process.argv.slice(2)
+  
+  if (args.includes('--install')) {
+    await installWrapper()
+    return
+  }
+  
+  if (args.includes('--lang')) {
+    const idx = args.indexOf('--lang')
+    if (args[idx+1]==='en') { T.lang='en'; saveLang() }
+    else if (args[idx+1]==='zh') { T.lang='zh'; saveLang() }
+  }
+  
+  // Direct run: ccb fix 1 / ccb fix 7
+  if (args.length > 0) {
+    const n = parseInt(args[0])
+    const fn = M[n]?.fn
+    if (fn && fn!=='exit') { 
+      if (typeof eval(fn) === 'function') {
+        await eval(fn+'()')
+        return
+      }
+    }
+    if (n===0) { console.log('\n'); return }
+  }
+  
+  // Auto-detect port
+  PORT = detectPort()
+  
+  // Interactive menu
+  while (1) {
+    hr(_('title'))
+    for (const [k,v] of Object.entries(M)) {
+      console.log('  '+C.c+k+'.'+C.R+'  '+v.zh)
+    }
+    console.log('')
+    const ans = await askNum(8, '')
+    const fn = M[ans]?.fn
+    if (!fn) { warn(_('invalid')); continue }
+    if (fn==='exit') { console.log('\n'); return }
+    if (typeof eval(fn) === 'function') await eval(fn+'()')
+  }
+}
+
+main().catch(e => { error(e.message); process.exit(1) })
